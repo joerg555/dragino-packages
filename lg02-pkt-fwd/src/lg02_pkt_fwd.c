@@ -920,8 +920,15 @@ int main(int argc, char *argv[])
 
     fp = fopen("/etc/lora/desc", "w+");
     if (NULL != fp) {
-        fprintf(fp, "%s struct: spiport=%d, freq=%u, sf=%d\n", rxdev->desc, rxdev->spiport, rxdev->freq, rxdev->sf);
-        fprintf(fp, "%s struct: spiport=%d, freq=%u, sf=%d\n", txdev->desc, txdev->spiport, txdev->freq, txdev->sf);
+        if (!isLG01)
+        {
+            fprintf(fp, "LG01 %s struct: spiport=%d, freq=%u, sf=%d\n", rxdev->desc, rxdev->spiport, rxdev->freq, rxdev->sf);
+        }
+        else
+        {
+            fprintf(fp, "LG02 %s struct: spiport=%d, freq=%u, sf=%d\n", rxdev->desc, rxdev->spiport, rxdev->freq, rxdev->sf);
+            fprintf(fp, "LG02 %s struct: spiport=%d, freq=%u, sf=%d\n", txdev->desc, txdev->spiport, txdev->freq, txdev->sf);
+        }
         fprintf(fp, "Lora Gateway service Mode=%s, gatewayID=%s, server=%s\n", server_type, gatewayid, server);
         fflush(fp);
         fclose(fp);
