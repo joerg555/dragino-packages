@@ -78,9 +78,9 @@ volatile bool exit_sig = false; /* 1 -> application terminates cleanly (shut dow
 volatile bool quit_sig = false; /* 1 -> application terminates without shutting down the hardware */
 
 /* packets filtering configuration variables */
-static bool fwd_valid_pkt = true; /* packets with PAYLOAD CRC OK are forwarded */
-static bool fwd_error_pkt = false; /* packets with PAYLOAD CRC ERROR are NOT forwarded */
-static bool fwd_nocrc_pkt = false; /* packets with NO PAYLOAD CRC are NOT forwarded */
+//static bool fwd_valid_pkt = true; /* packets with PAYLOAD CRC OK are forwarded */
+//static bool fwd_error_pkt = false; /* packets with PAYLOAD CRC ERROR are NOT forwarded */
+//static bool fwd_nocrc_pkt = false; /* packets with NO PAYLOAD CRC are NOT forwarded */
 
 /* network configuration variables */
 static uint64_t lgwm = 0; /* Lora gateway MAC address */
@@ -167,6 +167,7 @@ static uint32_t meas_up_dgram_sent = 0; /* number of datagrams sent for upstream
 static uint32_t meas_up_ack_rcv = 0; /* number of datagrams acknowledged for upstream traffic */
 
 static pthread_mutex_t mx_meas_dw = PTHREAD_MUTEX_INITIALIZER; /* control access to the downstream measurements */
+static pthread_mutex_t mx_lg01rxtx = PTHREAD_MUTEX_INITIALIZER; /* LG01 rx/tx */
 
 static pthread_mutex_t mx_sock_up = PTHREAD_MUTEX_INITIALIZER; /* control access to the upstream file descript */
 static uint32_t meas_dw_pull_sent = 0; /* number of PULL requests sent for downstream traffic */
@@ -225,6 +226,7 @@ static double difftimespec(struct timespec end, struct timespec beginning);
 
 radiodev *rxdev;
 radiodev *txdev;
+bool isLG01 = false;
 
 /* threads */
 void thread_stat(void);
@@ -285,6 +287,35 @@ cleanup:
     ctx = NULL;
     return ret;
 }
+
+static long get_lconfig(const char *section, const char *option, long idefvalue) {
+    struct uci_package *pkg = NULL;
+    struct uci_element *e;
+    const char *value;
+    long  lretval = idefvalue;
+
+    ctx = uci_alloc_context();
+    if (UCI_OK != uci_load(ctx, uci_config_file, &pkg))
+        goto cleanup;   /* load uci conifg failed*/
+
+    uci_foreach_element(&pkg->sections, e)
+    {
+        struct uci_section *st = uci_to_section(e);
+
+        if (!strcmp(section, st->e.name))  /* compare section name */ {
+            if (NULL != (value = uci_lookup_option_string(ctx, st, option))) {
+                lretval = atol(value);
+                break;
+            }
+        }
+    }
+    uci_unload(ctx, pkg); /* free pkg which is UCI package */
+cleanup:
+    uci_free_context(ctx);
+    ctx = NULL;
+    return lretval;
+}
+
 
 static double difftimespec(struct timespec end, struct timespec beginning) {
     double x;
@@ -349,7 +380,7 @@ static int init_socket(const char *servaddr, const char *servport, const char *r
         return -1;
     }
 
-    MSG_DEBUG(DEBUG_INFO, "INFO~ sockfd=%d\n", sockfd);
+    MSG_DEBUG(DEBUG_INFO, "INFO~ server %s (port %s) sockfd=%d\n", servaddr, servport, sockfd);
 
     return sockfd;
 }
@@ -556,17 +587,17 @@ int main(int argc, char *argv[])
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
     /* load configuration */
-    strcpy(uci_config_file, "/etc/config/gateway");
+    JSTRNCPY(uci_config_file, "/etc/config/gateway");
 
     if (!get_config("general", provider, 16)){
-        strcpy(provider, "ttn");  
+        JSTRNCPY(provider, "ttn");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option provider=%s\n", provider);
     }
 
     snprintf(server, sizeof(server), "%s_server", provider); 
 
     if (!get_config("general", server, sizeof(server))){ /*set default:router.eu.thethings.network*/
-        strcpy(server, "router.us.thethings.network");  
+        JSTRNCPY(server, "router.us.thethings.network");
     }
 
     /*
@@ -576,36 +607,36 @@ int main(int argc, char *argv[])
     */
 
     if (!get_config("general", port, 8)){
-        strcpy(port, "1700");
+        JSTRNCPY(port, "1700");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option port=%s\n", port);
     }
 
-    strcpy(serv_port_up, port);
+    JSTRNCPY(serv_port_up, port);
 
     if (!get_config("general", dwport, 8)){
-        strcpy(dwport, "1700");
+        JSTRNCPY(dwport, "1700");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option port=%s\n", port);
     }
 
-    strcpy(serv_port_down, dwport);
+    JSTRNCPY(serv_port_down, dwport);
 
     if (!get_config("general", email, 32)){
-        strcpy(email, "dragino@dragino.com");
+        JSTRNCPY(email, "dragino@dragino.com");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option email=%s\n", email);
     }
 
     if (!get_config("general", gatewayid, 64)){
-        strcpy(gatewayid, "a84041ffff16c21c");      /*set default:router.eu.thethings.network*/
+        JSTRNCPY(gatewayid, "a84041ffff16c21c");      /*set default:router.eu.thethings.network*/
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option gatewayid=%s\n", gatewayid);
     } 
 
     if (!get_config("general", LAT, 16)){
-        strcpy(LAT, "0");
+        JSTRNCPY(LAT, "0");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option lat=%s\n", LAT);
     }
 
     if (!get_config("general", LON, 16)){
-        strcpy(LON, "0");
+        JSTRNCPY(LON, "0");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option lon=%s\n", LON);
     }
 
@@ -615,7 +646,7 @@ int main(int argc, char *argv[])
 
     /* server_type : 1.lorawan  2.relay  3.mqtt  4.tcpudp */
     if (!get_config("general", server_type, 16)){
-        strcpy(server_type, "lorawan");
+        JSTRNCPY(server_type, "lorawan");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option server_type=%s\n", server_type);
     }
 
@@ -627,72 +658,72 @@ int main(int argc, char *argv[])
 
     /* power for transimit form 5 to 20 */
     if (!get_config("general", tx_power, 8)){
-        strcpy(tx_power, "16");
+        JSTRNCPY(tx_power, "16");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option tx_power=%s\n", tx_power);
     }
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 
     if (!get_config("radio1", rx_freq, 16)){
-        strcpy(rx_freq, "902320000"); /* default frequency*/
+        JSTRNCPY(rx_freq, "902320000"); /* default frequency*/
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option rxfreq=%s\n", rx_freq);
     }
 
     if (!get_config("radio1", rxsf, 8)){
-        strcpy(rxsf, "7");
+        JSTRNCPY(rxsf, "7");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option rxsf=%s\n", rxsf);
     }
 
     if (!get_config("radio1", rxcr, 8)){
-        strcpy(rxcr, "5");
+        JSTRNCPY(rxcr, "5");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option coderate=%s\n", rxcr);
     }
     
     if (!get_config("radio1", rxbw, 8)){
-        strcpy(rxbw, "125000");
+        JSTRNCPY(rxbw, "125000");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option rxbw=%s\n", rxbw);
     }
 
     if (!get_config("radio1", rxprlen, 8)){
-        strcpy(rxprlen, "8");
+        JSTRNCPY(rxprlen, "8");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option rxprlen=%s\n", rxprlen);
     }
 
-    if (!get_config("radio1", syncwd1, 8)){
-        strcpy(syncwd1, "52");  //Value 0x34 is reserved for LoRaWAN networks
-        MSG_LOG(DEBUG_UCI, "UCIINFO~ get option syncword=0x%02x\n", syncwd1);
+    if (!get_config("radio1", syncwd1, 8)) {
+        JSTRNCPY(syncwd1, "52");  //Value 0x34 is reserved for LoRaWAN networks
+        MSG_LOG(DEBUG_UCI, "UCIINFO~ get option syncword=0x%02x\n", atoi(syncwd1));
     }
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 
     if (!get_config("radio2", tx_freq, 16)){
-        strcpy(tx_freq, "923300000"); /* default frequency*/
+        JSTRNCPY(tx_freq, "923300000"); /* default frequency*/
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option txfreq=%s\n", tx_freq);
     }
 
     if (!get_config("radio2", txsf, 8)){
-        strcpy(txsf, "9");
+        JSTRNCPY(txsf, "9");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option txsf=%s\n", txsf);
     }
 
     if (!get_config("radio2", txcr, 8)){
-        strcpy(txcr, "5");
+        JSTRNCPY(txcr, "5");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option coderate=%s\n", txcr);
     }
 
     if (!get_config("radio2", txbw, 8)){
-        strcpy(txbw, "125000");
+        JSTRNCPY(txbw, "125000");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option rxbw=%s\n", txbw);
     }
 
     if (!get_config("radio2", txprlen, 8)){
-        strcpy(txprlen, "8");
+        JSTRNCPY(txprlen, "8");
         MSG_LOG(DEBUG_UCI, "UCIINFO~ get option txprlen=%s\n", txprlen);
     }
 
     if (!get_config("radio2", syncwd2, 8)){
-        strcpy(syncwd2, "52");  //Value 0x34 is reserved for LoRaWAN networks
-        MSG_LOG(DEBUG_UCI, "UCIINFO~ get option syncword2=0x%02x\n", syncwd2);
+        JSTRNCPY(syncwd2, "52");  //Value 0x34 is reserved for LoRaWAN networks
+        MSG_LOG(DEBUG_UCI, "UCIINFO~ get option syncword2=0x%02x\n", atoi(syncwd2));
     }
 
     switch (atoi(logdebug)) {
@@ -793,13 +824,14 @@ int main(int argc, char *argv[])
     rxdev->spiport = lgw_spi_open(SPI_DEV_RX);
     if (rxdev->spiport < 0) { 
         MSG_LOG(DEBUG_ERROR, "ERROR~ open spi_dev_tx error!\n");
-        goto clean;
+        isLG01 = true;
+        //goto clean;
     }
     rxdev->freq = atol(rx_freq);
     rxdev->sf = atoi(rxsf);
     rxdev->bw = atol(rxbw);
     rxdev->cr = atoi(rxcr);
-    rxdev->nocrc = 0;  /* crc check */
+    rxdev->nocrc = get_lconfig("radio1", "NOCRC", 0); /* crc check */
     rxdev->prlen = atoi(rxprlen);
     rxdev->syncword = atoi(syncwd1);
     rxdev->invertio = 0;
@@ -821,7 +853,7 @@ int main(int argc, char *argv[])
     txdev->sf = atoi(txsf);
     txdev->bw = atol(txbw);
     txdev->cr = atoi(txcr);
-    txdev->nocrc = 0;
+    txdev->nocrc = get_lconfig("radio2", "NOCRC", 0); /* crc check */
     txdev->prlen = atoi(txprlen);
     txdev->syncword = atoi(syncwd2);
     txdev->invertio = 0;
@@ -829,24 +861,46 @@ int main(int argc, char *argv[])
     strcpy(txdev->desc, "Radio2");
 
     /* swap radio1 and radio2 */
-    if (!strcmp(radio_mode, "1")) {
+    if (isLG01 || !strcmp(radio_mode, "1")) {
         radiodev *tmpdev;
         tmpdev = rxdev;
         rxdev = txdev;
         txdev = tmpdev;
     }
 
-    MSG_LOG(DEBUG_INFO, "INFO~ %s struct: spiport=%d, freq=%ld, sf=%d, syncwd=0x%02x\n", rxdev->desc, rxdev->spiport, rxdev->freq, rxdev->sf, rxdev->syncword);
-    MSG_LOG(DEBUG_INFO, "INFO~ %s struct: spiport=%d, freq=%ld, sf=%d, syncwd=0x%02x\n", txdev->desc, txdev->spiport, txdev->freq, txdev->sf, txdev->syncword);
-
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 
-    if(get_radio_version(rxdev) == false) 
-        goto clean;
+    if (get_radio_version(rxdev) == false)
+    {
+        radiodev *tmpdev;
+        tmpdev = rxdev;
+        rxdev = txdev;
+        txdev = tmpdev;
+        isLG01 = true;
+        // take rxparameter
+        rxdev->freq = get_lconfig("radio1","RFFREQ", 902320000);
+        rxdev->sf = get_lconfig("radio1", "RFSF", 7);
+        rxdev->bw = get_lconfig("radio1", "RFBW", 125000);
+        rxdev->cr = get_lconfig("radio1", "RFCR", 5);
+        rxdev->nocrc = txdev->nocrc;  /* crc check */
+        rxdev->prlen = txdev->prlen;
+        rxdev->syncword = txdev->syncword;
+        rxdev->invertio = txdev->invertio;
+        rxdev->power = txdev->power;
+        strcpy(rxdev->desc, "Radio1");
+        if (get_radio_version(rxdev) == false)
+            goto clean;
+        MSG_LOG(DEBUG_INFO, "INFO~ LG01 %s struct: spiport=%d, freq=%u, sf=%d, syncwd=0x%02x, nocrc=%d\n", rxdev->desc, rxdev->spiport, rxdev->freq, rxdev->sf, rxdev->syncword, rxdev->nocrc);
+    }
+    else
+    {
+        MSG_LOG(DEBUG_INFO, "INFO~ %s struct: spiport=%d, freq=%u, sf=%d, syncwd=0x%02x\n", rxdev->desc, rxdev->spiport, rxdev->freq, rxdev->sf, rxdev->syncword);
+        MSG_LOG(DEBUG_INFO, "INFO~ %s struct: spiport=%d, freq=%u, sf=%d, syncwd=0x%02x\n", txdev->desc, txdev->spiport, txdev->freq, txdev->sf, txdev->syncword);
+    }
 
     setup_channel(rxdev);
 
-    if (strcmp(server_type, "lorawan"))
+    if (!isLG01 && strcmp(server_type, "lorawan"))
         setup_channel(txdev);
 
     /* configure signal handling */
@@ -866,8 +920,8 @@ int main(int argc, char *argv[])
 
     fp = fopen("/etc/lora/desc", "w+");
     if (NULL != fp) {
-        fprintf(fp, "%s struct: spiport=%d, freq=%ld, sf=%d\n", rxdev->desc, rxdev->spiport, rxdev->freq, rxdev->sf);
-        fprintf(fp, "%s struct: spiport=%d, freq=%ld, sf=%d\n", txdev->desc, txdev->spiport, txdev->freq, txdev->sf);
+        fprintf(fp, "%s struct: spiport=%d, freq=%u, sf=%d\n", rxdev->desc, rxdev->spiport, rxdev->freq, rxdev->sf);
+        fprintf(fp, "%s struct: spiport=%d, freq=%u, sf=%d\n", txdev->desc, txdev->spiport, txdev->freq, txdev->sf);
         fprintf(fp, "Lora Gateway service Mode=%s, gatewayID=%s, server=%s\n", server_type, gatewayid, server);
         fflush(fp);
         fclose(fp);
@@ -910,10 +964,13 @@ int main(int argc, char *argv[])
         }
     }
 
-    i = pthread_create( &thrid_push, NULL, (void * (*)(void *))thread_push, NULL);
-    if (i != 0) {
-        MSG_LOG(DEBUG_ERROR, "ERROR~ [main] impossible to create push data thread\n");
-        exit(EXIT_FAILURE);
+    if (!isLG01)
+    {
+        i = pthread_create(&thrid_push, NULL, (void *(*)(void *))thread_push, NULL);
+        if (i != 0) {
+            MSG_LOG(DEBUG_ERROR, "ERROR~ [main] impossible to create push data thread\n");
+            exit(EXIT_FAILURE);
+        }
     }
 
     /* main thread for receive message, then process the message */
@@ -941,10 +998,11 @@ int main(int argc, char *argv[])
     rxlora_time = time(NULL);
     while (!exit_sig && !quit_sig) {
         now_time = time(NULL);
-        if (digitalRead(rxdev->dio[0]) == 1) {  /* read IO if RXDONE */
-            if (received(rxdev->spiport, &pktrx) != true) {
-                continue;
-            } else if (!strcmp(server_type, "lorawan")) {
+        pthread_mutex_lock(&mx_lg01rxtx);
+        bool rxok = digitalRead(rxdev->dio[0]) == 1 && received(rxdev->spiport, &pktrx) == true;
+        pthread_mutex_unlock(&mx_lg01rxtx);
+        if (rxok) {  /* read IO if RXDONE */
+            if (!strcmp(server_type, "lorawan")) {
                  /* local timestamp generation until we get accurate GPS time */
                  clock_gettime(CLOCK_REALTIME, &fetch_time);
                  x = gmtime(&(fetch_time.tv_sec)); /* split the UNIX timestamp to its calendar components */
@@ -962,7 +1020,9 @@ int main(int argc, char *argv[])
                  buff_up[2] = token_l;
                  buff_index = 12; /* 12-byte header */
 
-                 j = snprintf((char *)(buff_up + buff_index), TX_BUFF_SIZE - buff_index, "{\"rxpk\":[{\"time\":\"%s\",\"tmst\":%u,\"chan\":0,\"rfch\":1,\"freq\":%.6lf,\"stat\":1,\"modu\":\"LORA\",\"datr\":\"SF%dBW125\",\"codr\":\"4/%s\",\"lsnr\":%.1f", fetch_timestamp, tmst, (double)(rxdev->freq)/1000000, rxdev->sf, rxdev->cr, pktrx.snr);
+                 j = snprintf((char *)(buff_up + buff_index), TX_BUFF_SIZE - buff_index, 
+                     "{\"rxpk\":[{\"time\":\"%s\",\"tmst\":%u,\"chan\":0,\"rfch\":1,\"freq\":%.6lf,\"stat\":1,\"modu\":\"LORA\",\"datr\":\"SF%dBW125\",\"codr\":\"4/%d\",\"lsnr\":%.1f", 
+                     fetch_timestamp, tmst, (double)(rxdev->freq)/1000000, rxdev->sf, rxdev->cr, pktrx.snr);
 
                  buff_index += j;
 
@@ -1020,7 +1080,8 @@ int main(int argc, char *argv[])
         }
     }
 
-    pthread_cancel(thrid_push); /* don't wait for push thread */
+    if (!isLG01)
+        pthread_cancel(thrid_push); /* don't wait for push thread */
 
     output_status(0);
 
@@ -1287,7 +1348,6 @@ void thread_down(void) {
     *(uint32_t *)(buff_req + 4) = net_mac_h;
     *(uint32_t *)(buff_req + 8) = net_mac_l;
 
-
     while (!exit_sig && !quit_sig) {
 	    
         /* auto-quit if the threshold is crossed */
@@ -1307,7 +1367,7 @@ void thread_down(void) {
         send(sock_down, (void *)buff_req, sizeof buff_req, 0);
         pull_send++;
         clock_gettime(CLOCK_MONOTONIC, &send_time);
-            //MSG("INFOERROR [down] send pull_data, %ld\n", send_time.tv_nsec);
+            //MSG("INFOERROR [down] send pull_data, %u\n", send_time.tv_nsec);
         pthread_mutex_lock(&mx_meas_dw);
         meas_dw_pull_sent += 1;
         pthread_mutex_unlock(&mx_meas_dw);
@@ -1389,120 +1449,120 @@ void thread_down(void) {
                 continue;
             }
             
-                /* Parse "immediate" tag, or target timestamp, or UTC time to be converted by GPS (mandatory) */
-                i = json_object_get_boolean(txpk_obj,"imme"); /* can be 1 if true, 0 if false, or -1 if not a JSON boolean */
-                if (i == 1) {
-                    /* TX procedure: send immediately */
-                    sent_immediate = true;
+            /* Parse "immediate" tag, or target timestamp, or UTC time to be converted by GPS (mandatory) */
+            i = json_object_get_boolean(txpk_obj,"imme"); /* can be 1 if true, 0 if false, or -1 if not a JSON boolean */
+            if (i == 1) {
+                /* TX procedure: send immediately */
+                sent_immediate = true;
+                downlink_type = JIT_PKT_TYPE_DOWNLINK_CLASS_C;
+                MSG_DEBUG(DEBUG_INFO, "INFO~ [down] a packet will be sent in \"immediate\" mode\n");
+            } else {
+                sent_immediate = false;
+                val = json_object_get_value(txpk_obj,"tmst");
+                if (val != NULL) {
+                    /* TX procedure: send on timestamp value */
+                    txpkt.count_us = (uint32_t)json_value_get_number(val);
+
+                    /* Concentrator timestamp is given, we consider it is a Class A downlink */
+                    downlink_type = JIT_PKT_TYPE_DOWNLINK_CLASS_A;
+                } else {
                     downlink_type = JIT_PKT_TYPE_DOWNLINK_CLASS_C;
-                    MSG_DEBUG(DEBUG_INFO, "INFO~ [down] a packet will be sent in \"immediate\" mode\n");
+                }
+            }
+
+            /* Parse "No CRC" flag (optional field) */
+            val = json_object_get_value(txpk_obj,"ncrc");
+            if (val != NULL) {
+                txpkt.no_crc = (bool)json_value_get_boolean(val);
+            }
+
+            /* parse target frequency (mandatory) */
+            val = json_object_get_value(txpk_obj,"freq");
+            if (val == NULL) {
+                MSG_LOG(DEBUG_WARNING, "WARNING~ [down] no mandatory \"txpk.freq\" object in JSON, TX aborted\n");
+                json_value_free(root_val);
+                continue;
+            }
+            txpkt.freq_hz = (uint32_t)((double)(1.0e6) * json_value_get_number(val));
+
+            /* parse TX power (optional field) */
+            val = json_object_get_value(txpk_obj,"powe");
+            if (val != NULL) {
+                txpkt.rf_power = (int8_t)json_value_get_number(val);
+            }
+
+            /* Parse Lora spreading-factor and modulation bandwidth (mandatory) */
+            str = json_object_get_string(txpk_obj, "datr");
+            if (str == NULL) {
+                MSG_LOG(DEBUG_WARNING, "WARNING~ [down] no mandatory \"txpk.datr\" object in JSON, TX aborted\n");
+                json_value_free(root_val);
+                continue;
+            }
+            i = sscanf(str, "SF%2hdBW%3hd", &x0, &x1);
+            if (i != 2) {
+                MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.datr\", TX aborted\n");
+                json_value_free(root_val);
+                continue;
+            }
+            switch (x0) {
+                case  7: txpkt.datarate = DR_LORA_SF7;  break;
+                case  8: txpkt.datarate = DR_LORA_SF8;  break;
+                case  9: txpkt.datarate = DR_LORA_SF9;  break;
+                case 10: txpkt.datarate = DR_LORA_SF10; break;
+                case 11: txpkt.datarate = DR_LORA_SF11; break;
+                case 12: txpkt.datarate = DR_LORA_SF12; break;
+                default:
+                    MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.datr\", invalid SF, TX aborted\n");
+                    json_value_free(root_val);
+                    continue;
+            }
+            switch (x1) {
+                case 125: txpkt.bandwidth = BW_125KHZ; break;
+                case 250: txpkt.bandwidth = BW_250KHZ; break;
+                case 500: txpkt.bandwidth = BW_500KHZ; break;
+                default:
+                    MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.datr\", invalid BW, TX aborted\n");
+                    json_value_free(root_val);
+                    continue;
+            }
+
+            /* Parse ECC coding rate (optional field) */
+            str = json_object_get_string(txpk_obj, "codr");
+            if (str == NULL) {
+                MSG_LOG(DEBUG_WARNING, "WARNING~ [down] no mandatory \"txpk.codr\" object in json, TX aborted\n");
+                json_value_free(root_val);
+                continue;
+            }
+            if      (strcmp(str, "4/5") == 0) txpkt.coderate = CR_LORA_4_5;
+            else if (strcmp(str, "4/6") == 0) txpkt.coderate = CR_LORA_4_6;
+            else if (strcmp(str, "2/3") == 0) txpkt.coderate = CR_LORA_4_6;
+            else if (strcmp(str, "4/7") == 0) txpkt.coderate = CR_LORA_4_7;
+            else if (strcmp(str, "4/8") == 0) txpkt.coderate = CR_LORA_4_8;
+            else if (strcmp(str, "1/2") == 0) txpkt.coderate = CR_LORA_4_8;
+            else {
+                MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.codr\", TX aborted\n");
+                json_value_free(root_val);
+                continue;
+            }
+
+            /* Parse signal polarity switch (optional field) */
+            val = json_object_get_value(txpk_obj,"ipol");
+            if (val != NULL) {
+                txpkt.invert_pol = (bool)json_value_get_boolean(val);
+            }
+
+            /* parse Lora preamble length (optional field, optimum min value enforced) */
+            val = json_object_get_value(txpk_obj,"prea");
+            if (val != NULL) {
+                i = (int)json_value_get_number(val);
+                if (i >= MIN_LORA_PREAMB) {
+                    txpkt.preamble = (uint16_t)i;
                 } else {
-                    sent_immediate = false;
-                    val = json_object_get_value(txpk_obj,"tmst");
-                    if (val != NULL) {
-                        /* TX procedure: send on timestamp value */
-                        txpkt.count_us = (uint32_t)json_value_get_number(val);
-
-                        /* Concentrator timestamp is given, we consider it is a Class A downlink */
-                        downlink_type = JIT_PKT_TYPE_DOWNLINK_CLASS_A;
-                    } else {
-                        downlink_type = JIT_PKT_TYPE_DOWNLINK_CLASS_C;
-                    }
+                    txpkt.preamble = (uint16_t)MIN_LORA_PREAMB;
                 }
-
-                /* Parse "No CRC" flag (optional field) */
-                val = json_object_get_value(txpk_obj,"ncrc");
-                if (val != NULL) {
-                    txpkt.no_crc = (bool)json_value_get_boolean(val);
-                }
-
-                /* parse target frequency (mandatory) */
-                val = json_object_get_value(txpk_obj,"freq");
-                if (val == NULL) {
-                    MSG_LOG(DEBUG_WARNING, "WARNING~ [down] no mandatory \"txpk.freq\" object in JSON, TX aborted\n");
-                    json_value_free(root_val);
-                    continue;
-                }
-                txpkt.freq_hz = (uint32_t)((double)(1.0e6) * json_value_get_number(val));
-
-                /* parse TX power (optional field) */
-                val = json_object_get_value(txpk_obj,"powe");
-                if (val != NULL) {
-                    txpkt.rf_power = (int8_t)json_value_get_number(val);
-                }
-
-                /* Parse Lora spreading-factor and modulation bandwidth (mandatory) */
-                str = json_object_get_string(txpk_obj, "datr");
-                if (str == NULL) {
-                    MSG_LOG(DEBUG_WARNING, "WARNING~ [down] no mandatory \"txpk.datr\" object in JSON, TX aborted\n");
-                    json_value_free(root_val);
-                    continue;
-                }
-                i = sscanf(str, "SF%2hdBW%3hd", &x0, &x1);
-                if (i != 2) {
-                    MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.datr\", TX aborted\n");
-                    json_value_free(root_val);
-                    continue;
-                }
-                switch (x0) {
-                    case  7: txpkt.datarate = DR_LORA_SF7;  break;
-                    case  8: txpkt.datarate = DR_LORA_SF8;  break;
-                    case  9: txpkt.datarate = DR_LORA_SF9;  break;
-                    case 10: txpkt.datarate = DR_LORA_SF10; break;
-                    case 11: txpkt.datarate = DR_LORA_SF11; break;
-                    case 12: txpkt.datarate = DR_LORA_SF12; break;
-                    default:
-                        MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.datr\", invalid SF, TX aborted\n");
-                        json_value_free(root_val);
-                        continue;
-                }
-                switch (x1) {
-                    case 125: txpkt.bandwidth = BW_125KHZ; break;
-                    case 250: txpkt.bandwidth = BW_250KHZ; break;
-                    case 500: txpkt.bandwidth = BW_500KHZ; break;
-                    default:
-                        MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.datr\", invalid BW, TX aborted\n");
-                        json_value_free(root_val);
-                        continue;
-                }
-
-                /* Parse ECC coding rate (optional field) */
-                str = json_object_get_string(txpk_obj, "codr");
-                if (str == NULL) {
-                    MSG_LOG(DEBUG_WARNING, "WARNING~ [down] no mandatory \"txpk.codr\" object in json, TX aborted\n");
-                    json_value_free(root_val);
-                    continue;
-                }
-                if      (strcmp(str, "4/5") == 0) txpkt.coderate = CR_LORA_4_5;
-                else if (strcmp(str, "4/6") == 0) txpkt.coderate = CR_LORA_4_6;
-                else if (strcmp(str, "2/3") == 0) txpkt.coderate = CR_LORA_4_6;
-                else if (strcmp(str, "4/7") == 0) txpkt.coderate = CR_LORA_4_7;
-                else if (strcmp(str, "4/8") == 0) txpkt.coderate = CR_LORA_4_8;
-                else if (strcmp(str, "1/2") == 0) txpkt.coderate = CR_LORA_4_8;
-                else {
-                    MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.codr\", TX aborted\n");
-                    json_value_free(root_val);
-                    continue;
-                }
-
-                /* Parse signal polarity switch (optional field) */
-                val = json_object_get_value(txpk_obj,"ipol");
-                if (val != NULL) {
-                    txpkt.invert_pol = (bool)json_value_get_boolean(val);
-                }
-
-                /* parse Lora preamble length (optional field, optimum min value enforced) */
-                val = json_object_get_value(txpk_obj,"prea");
-                if (val != NULL) {
-                    i = (int)json_value_get_number(val);
-                    if (i >= MIN_LORA_PREAMB) {
-                        txpkt.preamble = (uint16_t)i;
-                    } else {
-                        txpkt.preamble = (uint16_t)MIN_LORA_PREAMB;
-                    }
-                } else {
-                    txpkt.preamble = (uint16_t)STD_LORA_PREAMB;
-                }
+            } else {
+                txpkt.preamble = (uint16_t)STD_LORA_PREAMB;
+            }
 
             /* Parse payload length (mandatory) */
             val = json_object_get_value(txpk_obj,"size");
@@ -1544,21 +1604,21 @@ void thread_down(void) {
             meas_dw_dgram_rcv += 1; /* count only datagrams with no JSON errors */
             meas_dw_network_byte += msg_len; /* meas_dw_network_byte */
             meas_dw_payload_byte += txpkt.size;
-                meas_nb_tx_ok += 1;
-                pthread_mutex_unlock(&mx_meas_dw);
+            meas_nb_tx_ok += 1;
+            pthread_mutex_unlock(&mx_meas_dw);
 
-                /* check TX parameter before trying to queue packet */                                      
-                gettimeofday(&current_unix_time, NULL);
-                jit_result = jit_enqueue(&jit_queue, &current_unix_time, &txpkt, downlink_type);
-                if (jit_result != JIT_ERROR_OK) {
-                    MSG_LOG(DEBUG_ERROR, "ERROR~ Packet REJECTED (jit error=%d)\n", jit_result);
-                }
-                pthread_mutex_lock(&mx_meas_dw);
-                meas_nb_tx_requested += 1;
-                pthread_mutex_unlock(&mx_meas_dw);
+            /* check TX parameter before trying to queue packet */                                      
+            gettimeofday(&current_unix_time, NULL);
+            jit_result = jit_enqueue(&jit_queue, &current_unix_time, &txpkt, downlink_type);
+            if (jit_result != JIT_ERROR_OK) {
+                MSG_LOG(DEBUG_ERROR, "ERROR~ Packet REJECTED (jit error=%d)\n", jit_result);
+            }
+            pthread_mutex_lock(&mx_meas_dw);
+            meas_nb_tx_requested += 1;
+            pthread_mutex_unlock(&mx_meas_dw);
 
-                /* Send acknoledge datagram to server */
-                send_tx_ack(buff_down[1], buff_down[2], jit_result);
+            /* Send acknoledge datagram to server */
+            send_tx_ack(buff_down[1], buff_down[2], jit_result);
         }
         if (pull_ack < labs(pull_send * 0.9)) {
             pull_ack = 0;
@@ -1575,24 +1635,14 @@ void thread_down(void) {
 /* -------------------------------------------------------------------------- */
 /* --- THREAD 4: SUB MESSAGE AND EMITTING PACKETS ------------------------ */
 
-void thread_push(void) {
-
+bool txlorapkt(const char *sdown, radiodev *loradev)
+{
     int i; /* loop variables */
-
-    DIR *dir;
-    FILE *fp;
-    struct dirent *ptr;
-
-    struct stat statbuf;
-
-    char push_file[128]; 
 
     /* configuration and metadata for an outbound packet */
     struct pkt_tx_s txpkt;
-    
-    /* data buffers */
-    uint8_t buff_down[512]; /* buffer to receive downstream packets */
-    
+
+
     /* JSON parsing variables */
     JSON_Value *root_val = NULL;
     JSON_Object *txpk_obj = NULL;
@@ -1603,6 +1653,162 @@ void thread_push(void) {
     /* Just In Time downlink */
     struct timeval current_unix_time;
 
+
+
+    MSG_LOG(DEBUG_PKT_FWD, "\nRXTX~ (TXPKT): [push] %s\n", sdown); /* DEBUG: display JSON payload */
+
+    /* initialize TX struct and try to parse JSON */
+    memset(&txpkt, 0, sizeof(txpkt));
+    root_val = json_parse_string_with_comments(sdown); /* JSON offset */
+    if (root_val == NULL) {
+        MSG_LOG(DEBUG_WARNING, "WARNING~ [push] invalid JSON, TX aborted\n");
+        return false;
+    }
+
+    /* look for JSON sub-object 'txpk' */
+    txpk_obj = json_object_get_object(json_value_get_object(root_val), "txpk");
+    if (txpk_obj == NULL) {
+        MSG_LOG(DEBUG_WARNING, "WARNING~ [push] no \"txpk\" object in JSON, TX aborted\n");
+        json_value_free(root_val);
+        return false;
+    }
+
+    /* Parse "No CRC" flag (optional field) */
+    val = json_object_get_value(txpk_obj, "ncrc");
+    if (val != NULL) {
+        txpkt.no_crc = (bool)json_value_get_boolean(val);
+    }
+
+    /* parse target frequency (mandatory) */
+    val = json_object_get_value(txpk_obj, "freq");
+    if (val == NULL) {
+        MSG_LOG(DEBUG_WARNING, "WARNING~ [down] no mandatory \"txpk.freq\" object in JSON, TX aborted\n");
+        json_value_free(root_val);
+        return false;
+    }
+    txpkt.freq_hz = (uint32_t)((double)(1.0e6) * json_value_get_number(val));
+
+    /* parse TX power (optional field) */
+    val = json_object_get_value(txpk_obj, "powe");
+    if (val != NULL) {
+        txpkt.rf_power = (int8_t)json_value_get_number(val);
+    }
+
+    /* Parse Lora spreading-factor and modulation bandwidth (mandatory) */
+    str = json_object_get_string(txpk_obj, "datr");
+    if (str == NULL) {
+        MSG_LOG(DEBUG_WARNING, "WARNING~ [down] no mandatory \"txpk.datr\" object in JSON, TX aborted\n");
+        json_value_free(root_val);
+        return false;
+    }
+    i = sscanf(str, "SF%2hdBW%3hd", &x0, &x1);
+    if (i != 2) {
+        MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.datr\", TX aborted\n");
+        json_value_free(root_val);
+        return false;
+    }
+    switch (x0) {
+    case  7: txpkt.datarate = DR_LORA_SF7;  break;
+    case  8: txpkt.datarate = DR_LORA_SF8;  break;
+    case  9: txpkt.datarate = DR_LORA_SF9;  break;
+    case 10: txpkt.datarate = DR_LORA_SF10; break;
+    case 11: txpkt.datarate = DR_LORA_SF11; break;
+    case 12: txpkt.datarate = DR_LORA_SF12; break;
+    default:
+        MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.datr\", invalid SF, TX aborted\n");
+        json_value_free(root_val);
+        return false;
+    }
+    switch (x1) {
+    case 125: txpkt.bandwidth = BW_125KHZ; break;
+    case 250: txpkt.bandwidth = BW_250KHZ; break;
+    case 500: txpkt.bandwidth = BW_500KHZ; break;
+    default:
+        MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.datr\", invalid BW, TX aborted\n");
+        json_value_free(root_val);
+        return false;
+    }
+
+    /* Parse ECC coding rate (optional field) */
+    str = json_object_get_string(txpk_obj, "codr");
+    if (str == NULL) {
+        MSG_LOG(DEBUG_WARNING, "WARNING~ [down] no mandatory \"txpk.codr\" object in json, TX aborted\n");
+        json_value_free(root_val);
+        return false;
+    }
+
+    if (strcmp(str, "4/5") == 0) txpkt.coderate = CR_LORA_4_5;
+    else if (strcmp(str, "4/6") == 0) txpkt.coderate = CR_LORA_4_6;
+    else if (strcmp(str, "2/3") == 0) txpkt.coderate = CR_LORA_4_6;
+    else if (strcmp(str, "4/7") == 0) txpkt.coderate = CR_LORA_4_7;
+    else if (strcmp(str, "4/8") == 0) txpkt.coderate = CR_LORA_4_8;
+    else if (strcmp(str, "1/2") == 0) txpkt.coderate = CR_LORA_4_8;
+    else {
+        MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.codr\", TX aborted\n");
+        json_value_free(root_val);
+        return false;
+    }
+
+    /* Parse signal polarity switch (optional field) */
+    val = json_object_get_value(txpk_obj, "ipol");
+    if (val != NULL) {
+        txpkt.invert_pol = (bool)json_value_get_boolean(val);
+    }
+
+    /* parse Lora preamble length (optional field, optimum min value enforced) */
+    val = json_object_get_value(txpk_obj, "prea");
+    if (val != NULL) {
+        i = (int)json_value_get_number(val);
+        if (i >= MIN_LORA_PREAMB) {
+            txpkt.preamble = (uint16_t)i;
+        }
+        else {
+            txpkt.preamble = (uint16_t)MIN_LORA_PREAMB;
+        }
+    }
+    else {
+        txpkt.preamble = (uint16_t)STD_LORA_PREAMB;
+    }
+
+    /* Parse payload data (mandatory) */
+    str = json_object_get_string(txpk_obj, "data");
+    if (str == NULL) {
+        MSG_LOG(DEBUG_WARNING, "WARNING~ [push] no mandatory \"txpk.data\" object in JSON, TX aborted\n");
+        json_value_free(root_val);
+        return false;
+    }
+
+    strcpy(txpkt.payload, str);
+
+    txpkt.size = (uint16_t)strlen(txpkt.payload);
+
+    /* free the JSON parse tree from memory */
+    json_value_free(root_val);
+
+    /* select TX mode */
+    txpkt.tx_mode = IMMEDIATE;
+
+    gettimeofday(&current_unix_time, NULL);
+    txpkt.count_us = current_unix_time.tv_sec + current_unix_time.tv_usec + 1495/*START_DELAY*/;
+
+    txlora(loradev, &txpkt);
+    return true;
+}
+
+void thread_push(void) {
+
+
+    DIR *dir;
+    FILE *fp;
+    struct dirent *ptr;
+
+    struct stat statbuf;
+
+    char push_file[128]; 
+    
+    /* data buffers */
+    uint8_t buff_down[512]; /* buffer to receive downstream packets */
+        
     while (!exit_sig && !quit_sig) {
         
         /* lookup file */
@@ -1634,155 +1840,9 @@ void thread_push(void) {
 
                 memset(buff_down, 0, sizeof(buff_down));
 
-                fread(buff_down, sizeof(char), sizeof(buff_down), fp); /* the size less than buff_down return EOF */
+                fread(buff_down, sizeof(char), sizeof(buff_down)-1, fp); /* the size less than buff_down return EOF */
 
                 unlink(push_file); /* delete the file */
-
-	        MSG_LOG(DEBUG_PKT_FWD, "\nRXTX~ (TXPKT): [push] %s\n", (char *)buff_down); /* DEBUG: display JSON payload */
-	    
-                /* initialize TX struct and try to parse JSON */
-                memset(&txpkt, 0, sizeof(txpkt));
-                root_val = json_parse_string_with_comments((const char *)buff_down); /* JSON offset */
-                if (root_val == NULL) {
-                    MSG_LOG(DEBUG_WARNING, "WARNING~ [push] invalid JSON, TX aborted\n");
-                    fclose(fp);
-                    continue;
-                }
-	    
-                /* look for JSON sub-object 'txpk' */
-                txpk_obj = json_object_get_object(json_value_get_object(root_val), "txpk");
-                if (txpk_obj == NULL) {
-                    MSG_LOG(DEBUG_WARNING, "WARNING~ [push] no \"txpk\" object in JSON, TX aborted\n");
-                    json_value_free(root_val);
-                    fclose(fp);
-                    continue;
-                }
-	    
-                /* Parse "No CRC" flag (optional field) */
-                val = json_object_get_value(txpk_obj,"ncrc");
-                if (val != NULL) {
-                    txpkt.no_crc = (bool)json_value_get_boolean(val);
-                }
-
-                /* parse target frequency (mandatory) */
-                val = json_object_get_value(txpk_obj,"freq");
-                if (val == NULL) {
-                    MSG_LOG(DEBUG_WARNING, "WARNING~ [down] no mandatory \"txpk.freq\" object in JSON, TX aborted\n");
-                    json_value_free(root_val);
-                    fclose(fp);
-                    continue;
-                }
-                txpkt.freq_hz = (uint32_t)((double)(1.0e6) * json_value_get_number(val));
-
-                /* parse TX power (optional field) */
-                val = json_object_get_value(txpk_obj,"powe");
-                if (val != NULL) {
-                    txpkt.rf_power = (int8_t)json_value_get_number(val);
-                }
-
-                /* Parse Lora spreading-factor and modulation bandwidth (mandatory) */
-                str = json_object_get_string(txpk_obj, "datr");
-                if (str == NULL) {
-                    MSG_LOG(DEBUG_WARNING, "WARNING~ [down] no mandatory \"txpk.datr\" object in JSON, TX aborted\n");
-                    json_value_free(root_val);
-                    fclose(fp);
-                    continue;
-                }
-                i = sscanf(str, "SF%2hdBW%3hd", &x0, &x1);
-                if (i != 2) {
-                    MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.datr\", TX aborted\n");
-                    json_value_free(root_val);
-                    fclose(fp);
-                    continue;
-                }
-                switch (x0) {
-                    case  7: txpkt.datarate = DR_LORA_SF7;  break;
-                    case  8: txpkt.datarate = DR_LORA_SF8;  break;
-                    case  9: txpkt.datarate = DR_LORA_SF9;  break;
-                    case 10: txpkt.datarate = DR_LORA_SF10; break;
-                    case 11: txpkt.datarate = DR_LORA_SF11; break;
-                    case 12: txpkt.datarate = DR_LORA_SF12; break;
-                    default:
-                        MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.datr\", invalid SF, TX aborted\n");
-                        json_value_free(root_val);
-                        fclose(fp);
-                        continue;
-                }
-                switch (x1) {
-                    case 125: txpkt.bandwidth = BW_125KHZ; break;
-                    case 250: txpkt.bandwidth = BW_250KHZ; break;
-                    case 500: txpkt.bandwidth = BW_500KHZ; break;
-                    default:
-                        MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.datr\", invalid BW, TX aborted\n");
-                        json_value_free(root_val);
-                        fclose(fp);
-                        continue;
-                }
-
-                /* Parse ECC coding rate (optional field) */
-                str = json_object_get_string(txpk_obj, "codr");
-                if (str == NULL) {
-                    MSG_LOG(DEBUG_WARNING, "WARNING~ [down] no mandatory \"txpk.codr\" object in json, TX aborted\n");
-                    json_value_free(root_val);
-                    fclose(fp);
-                    continue;
-                }
-
-                if      (strcmp(str, "4/5") == 0) txpkt.coderate = CR_LORA_4_5;
-                else if (strcmp(str, "4/6") == 0) txpkt.coderate = CR_LORA_4_6;
-                else if (strcmp(str, "2/3") == 0) txpkt.coderate = CR_LORA_4_6;
-                else if (strcmp(str, "4/7") == 0) txpkt.coderate = CR_LORA_4_7;
-                else if (strcmp(str, "4/8") == 0) txpkt.coderate = CR_LORA_4_8;
-                else if (strcmp(str, "1/2") == 0) txpkt.coderate = CR_LORA_4_8;
-                else {
-                    MSG_LOG(DEBUG_WARNING, "WARNING~ [down] format error in \"txpk.codr\", TX aborted\n");
-                    json_value_free(root_val);
-                    fclose(fp);
-                    continue;
-                }
-
-                /* Parse signal polarity switch (optional field) */
-                val = json_object_get_value(txpk_obj,"ipol");
-                if (val != NULL) {
-                    txpkt.invert_pol = (bool)json_value_get_boolean(val);
-                }
-
-                /* parse Lora preamble length (optional field, optimum min value enforced) */
-                val = json_object_get_value(txpk_obj,"prea");
-                if (val != NULL) {
-                    i = (int)json_value_get_number(val);
-                    if (i >= MIN_LORA_PREAMB) {
-                        txpkt.preamble = (uint16_t)i;
-                    } else {
-                        txpkt.preamble = (uint16_t)MIN_LORA_PREAMB;
-                    }
-                } else {
-                    txpkt.preamble = (uint16_t)STD_LORA_PREAMB;
-                }
-
-                /* Parse payload data (mandatory) */
-                str = json_object_get_string(txpk_obj, "data"); 
-                if (str == NULL) {
-                        MSG_LOG(DEBUG_WARNING, "WARNING~ [push] no mandatory \"txpk.data\" object in JSON, TX aborted\n");
-                        json_value_free(root_val);
-                        fclose(fp);
-                        continue;
-                }
-
-                strcpy(txpkt.payload, str);
-
-                txpkt.size = (uint16_t)strlen(txpkt.payload);
-
-                /* free the JSON parse tree from memory */
-                json_value_free(root_val);
-                
-                /* select TX mode */
-                txpkt.tx_mode = IMMEDIATE;
-
-                gettimeofday(&current_unix_time, NULL);
-                txpkt.count_us = current_unix_time.tv_sec + current_unix_time.tv_usec + 1495/*START_DELAY*/;
-
-                txlora(txdev, &txpkt);
                 /* insert the queue is the best method, but is too truble to construct the txpkt pakeage */
                 /* check TX parameter before trying to queue packet */                                      
                 /*
@@ -1791,12 +1851,13 @@ void thread_push(void) {
                 */
 
                 fclose(fp);
+                txlorapkt((const char *)buff_down, txdev);
             }
 
 	}
-            closedir(dir);
-            wait_ms(PUSH_TIMEOUT_MS);
-            continue;
+        closedir(dir);
+        wait_ms(PUSH_TIMEOUT_MS);
+        continue;
     }
     MSG_LOG(DEBUG_INFO, "\nINFO~ End of push thread\n");
 }
@@ -1821,7 +1882,17 @@ void thread_jit(void) {
             if (pkt_index > -1) {
                 jit_result = jit_dequeue(&jit_queue, pkt_index, &pkt, &pkt_type);
                 if (jit_result == JIT_ERROR_OK) {
-                    txlora(txdev, &pkt);
+                    if (isLG01)
+                    {
+                        pthread_mutex_lock(&mx_lg01rxtx);
+                        txlora(rxdev, &pkt);
+                        rxlora(rxdev, RXMODE_SCAN);  /* restart lora continue receive mode */
+                        pthread_mutex_unlock(&mx_lg01rxtx);
+                    }
+                    else
+                    {
+                        txlora(txdev, &pkt);
+                    }
                     pthread_mutex_lock(&mx_meas_dw);
                     meas_nb_tx_ok += 1;
                     pthread_mutex_unlock(&mx_meas_dw);
@@ -1886,7 +1957,7 @@ static void push_mqtt(struct pkt_rx_s* rx_pkt)
         static unsigned long next = 1;
         srand((unsigned)time(NULL));      /* random filename */
         next = next * 1103515245 + 12345;
-        sprintf(chan_path, "/var/iot/receive/%ld", (unsigned)(next/65536) % 32768);
+        sprintf(chan_path, "/var/iot/receive/%u", (unsigned)(next/65536) % 32768);
     }
     
     fp = fopen(chan_path, "w+");
