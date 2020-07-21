@@ -240,7 +240,7 @@ int main(int argc, char *argv[])
     loradev->invertio = 0;
     strcpy(loradev->desc, "RFDEV");	
 
-    MSG("Radio struct: spi_dev=%s, spiport=%d, freq=%ld, sf=%d, bw=%ld, cr=%d, pr=%d, wd=0x%2x, power=%d\n", radio, loradev->spiport, loradev->freq, loradev->sf, loradev->bw, loradev->cr, loradev->prlen, loradev->syncword, loradev->power);
+    MSG("Radio struct: spi_dev=%s, spiport=%d, freq=%u, sf=%u, bw=%u, cr=%d, pr=%d, wd=0x%2x, power=%d\n", radio, loradev->spiport, loradev->freq, loradev->sf, loradev->bw, loradev->cr, loradev->prlen, loradev->syncword, loradev->power);
 
     if(!get_radio_version(loradev))  
         goto clean;
@@ -304,7 +304,7 @@ int main(int argc, char *argv[])
             fp = fopen(filepath, "w+");
 
         MSG("\nListening at SF%i on %.6lf Mhz. port%i\n", loradev->sf, (double)(loradev->freq)/1000000, loradev->spiport);
-        fprintf(stdout, "REC_OK: %d,    CRCERR: %d\n", count_ok, count_err);
+        fprintf(stdout, "REC_OK: %lu,    CRCERR: %lu\n", count_ok, count_err);
         while (!exit_sig && !quit_sig) {
             if(digitalRead(loradev->dio[0]) == 1) {
                 memset(rxpkt.payload, 0, sizeof(rxpkt.payload));
@@ -354,7 +354,7 @@ int main(int argc, char *argv[])
                     else {
                         srand((unsigned)time(NULL)); 
                         next = next * 1103515245 + 12345;
-                        sprintf(chan_path, "/var/iot/channels/%ld", (unsigned)(next/65536) % 32768);
+                        sprintf(chan_path, "/var/iot/channels/%u", (unsigned)(next/65536) % 32768);
                     }
 
                     id_found = 0;  /* reset id_found */
@@ -369,9 +369,9 @@ int main(int argc, char *argv[])
                         fprintf(stderr, "ERROR~ canot open file path: %s\n", chan_path); 
 
                     //fprintf(stdout, "Received: %s\n", chan_data);
-                    fprintf(stdout, "count_OK: %d, count_CRCERR: %d\n", ++count_ok, count_err);
+                    fprintf(stdout, "count_OK: %lu, count_CRCERR: %lu\n", ++count_ok, count_err);
                 } else                                             
-                    fprintf(stdout, "REC_OK: %d, CRCERR: %d\n", count_ok, ++count_err);
+                    fprintf(stdout, "REC_OK: %lu, CRCERR: %lu\n", count_ok, ++count_err);
             }
         }
 

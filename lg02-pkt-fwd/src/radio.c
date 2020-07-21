@@ -271,7 +271,10 @@ int digitalRead(int gpio) {
     if (!gpio_release(gpio)) {
         return -1;
     }
-
+    if (state == 1)
+    {
+        MSG_LOG(1, "INFO~ digitalRead GPIO%d=%d\n", gpio, state);
+    }
     /* Return the port state */
     return state;
 }
@@ -697,7 +700,7 @@ bool received(uint8_t spidev, struct pkt_rx_s *pkt_rx) {
     // clean all IRQ
     writeReg(spidev, REG_IRQ_FLAGS, 0xFF);
 
-    //printf("Start receive, flags=%d\n", irqflags);
+    printf("Start receive, flags=%02x %02x\n", irqflags, irqflags & (IRQ_LORA_RXDONE_MASK | IRQ_LORA_CRCERR_MASK));
 
     if ((irqflags & IRQ_LORA_RXDONE_MASK) && (irqflags & IRQ_LORA_CRCERR_MASK) == 0) {
 
@@ -822,7 +825,7 @@ void txlora(radiodev *dev, struct pkt_tx_s *pkt) {
     // wait for TX done
     while(digitalRead(dev->dio[0]) == 0);
 
-    MSG_LOG(DEBUG_INFO, "\nINFO~ Transmit at SF%iBW%ld on %.6lf.\n", sf_getval(pkt->datarate), bw_getval(pkt->bandwidth)/1000, (double)(pkt->freq_hz)/1000000);
+    MSG_LOG(DEBUG_INFO, "\nINFO~ Transmit at SF%iBW%u on %.6lf.\n", sf_getval(pkt->datarate), bw_getval(pkt->bandwidth)/1000, (double)(pkt->freq_hz)/1000000);
 
     // mask all IRQs
     writeReg(dev->spiport, REG_IRQ_FLAGS_MASK, 0xFF);
@@ -880,7 +883,7 @@ void single_tx(radiodev *dev, uint8_t *payload, int size) {
     // wait for TX done
     while(digitalRead(dev->dio[0]) == 0);
 
-    MSG_LOG(DEBUG_INFO, "\nINFO~Transmit at SF%iBW%ld on %.6lf.\n", dev->sf, (dev->bw)/1000, (double)(dev->freq)/1000000);
+    MSG_LOG(DEBUG_INFO, "\nINFO~Transmit at SF%iBW%u on %.6lf.\n", dev->sf, (dev->bw)/1000, (double)(dev->freq)/1000000);
 
     // mask all IRQs
     writeReg(dev->spiport, REG_IRQ_FLAGS_MASK, 0xFF);
